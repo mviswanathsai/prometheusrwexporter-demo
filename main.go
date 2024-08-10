@@ -13,58 +13,40 @@ import (
 )
 
 func main() {
-	request := pmetricotlp.NewExportRequest()
-	resourceMetric := request.Metrics().ResourceMetrics().AppendEmpty()
-
-	// The attributes of the Resource will also be tagged along with the samples/histogramDPs
-	resourceAttrs := resourceMetric.Resource().Attributes()
-	generateAttributes(resourceAttrs, "demo-resource", 10)
-	resourceLabelSet := getLabelsFromAttrs(resourceAttrs)
-
-	metrics := resourceMetric.ScopeMetrics().AppendEmpty().Metrics()
-	generateExponentialHistograms(metrics, "demo-histogram", 10, 10)
-
-	var labelSet []prompb.Label
-	// Should the resource's attributes also be part of the labelset of the metrics it produces?
-	// lets avoid complexity and generate one timeseries per metric
-	for i := 0; i < metrics.Len(); i++ {
-		histogramDPs := metrics.At(i).ExponentialHistogram().DataPoints()
-		for j := 0; j < histogramDPs.Len(); j++ {
-			// I reckon there is a way to check for duplicates by hashing, this is done by the PrometheusConverter in
-			// the Prometheus Repo. But just to outline the high level flow, I do not think it is necessary.
-			labelSet = append(resourceLabelSet, getLabelsFromAttrs(histogramDPs.At(j).Attributes())...)
-		}
-	}
-
-	symbols := generateSymbolsTableFromLabels(labelSet)
-	timeSeries := []typesv2.TimeSeries{}
-
-	// I reckon these can be done (possibly) with goroutines.
-	for i := 0; i < metrics.Len(); i++ {
-		labelSet = []prompb.Label{}
-		histogramDPs := metrics.At(i).ExponentialHistogram().DataPoints()
-		for j := 0; j < histogramDPs.Len(); j++ {
-			labelSet = append(resourceLabelSet, getLabelsFromAttrs(histogramDPs.At(j).Attributes())...)
-		}
-		timeSeries = append(timeSeries, createV2TimeSeries(symbols, metrics.At(i), labelSet))
-	}
-
-	createRequest(symbols, timeSeries)
-
-	// then we have to encode this request and send it using protobuf.
-	// but how?
+	PrepareDummyExportRequest()
 }
-
 
 type V2WriteRequestBuilder struct {
-	metrics    pmetric.ResourceMetricsSlice
-	attributes pcommon.Map
-	labelSet   []prompb.Label
-	symbols    []string
+	resources pmetric.ResourceMetricsSlice
+	symbols   []string
 }
 
-func NewRequestBuilder(exportReq pmetricotlp.ExportRequest) V2WriteRequestBuilder{
-	return V2WriteRequestBuilder{}
+func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) V2WriteRequestBuilder {
+	resourceMetrics := exportReq.Metrics().ResourceMetrics()
+
+	return V2WriteRequestBuilder{
+		resources: resourceMetrics,
+	}
+}
+
+// Seems like we might have to do this loop twice: 1. For creating the symbols table, 2. For converting Metrics to TS
+func (builder V2WriteRequestBuilder) makeSymbols() {
+	// For this, you have to loop through each  metric of each Scope of each Resource: That means 1
+	// nested loop.
+	// This is ofcourse, too much complexity. What can we do?
+	resourceMetricsSlice := builder.resources
+	for i := 0; i < resourceMetricsSlice.Len(); i++ {
+
+		for j := 0; j < resourceMetricsSlice.At(i).ScopeMetrics().Len(); j++ {
+			scopeMetricsSlice := resourceMetricsSlice.At(i).ScopeMetrics()
+
+			for k := 0; k < scopeMetricsSlice.At(j).Metrics().Len(); k++ {
+                scopeMetricsSlice.At(j).Metrics().At(k).Attributes()
+
+
+			}
+		}
+	}
 }
 
 func createRequest(symbols []string, timeSeries []typesv2.TimeSeries) typesv2.Request {
@@ -117,7 +99,7 @@ func addLabelRefs(symbols []string, labelSet []prompb.Label, ts typesv2.TimeSeri
 	ts.LabelsRefs = labelRefs
 }
 
-func generateSymbolsTableFromLabels(labels []prompb.Label) (symbols []string) {
+func generateSymbolsFromLabels(labels []prompb.Label) (symbols []string) {
 	for _, label := range labels {
 		symbols = append(symbols, label.Name, label.Value)
 	}
@@ -147,9 +129,10 @@ func generateAttributes(m pcommon.Map, prefix string, count int) {
 	}
 }
 
-func generateExponentialHistograms(metrics pmetric.MetricSlice, prefix string, histogramCount int, attrCount int) {
+// For each Metric inside ScopeMetrics, we are appending histograms with the same attributes each time.
+func genHistogramsPerMetricIn(metrics pmetric.MetricSlice, prefix string, metricCount int, attrCount int) {
 	ts := pcommon.NewTimestampFromTime(time.Now())
-	for i := 1; i <= histogramCount; i++ {
+	for i := 1; i <= metricCount; i++ {
 		m := metrics.AppendEmpty()
 		m.SetEmptyHistogram()
 		m.SetName(fmt.Sprintf("histogram-%v", i))
@@ -164,4 +147,22 @@ func generateExponentialHistograms(metrics pmetric.MetricSlice, prefix string, h
 
 		generateAttributes(h.Attributes(), prefix, attrCount)
 	}
+}
+
+func PrepareDummyExportRequest() pmetricotlp.ExportRequest {
+	request := pmetricotlp.NewExportRequest()
+	// This adds one Resource to MetricsSlice.
+	resourceMetric := request.Metrics().ResourceMetrics().AppendEmpty()
+
+	resourceAttrs := resourceMetric.Resource().Attributes()
+	// This generates 10 ResourceAttributes for the Resource.
+	generateAttributes(resourceAttrs, "demo-resource", 10)
+
+	// This will add one ScopeMetrics to the list of ScopeMetricsSlice.
+	// Essentially, adding one Scope to the given resource.
+	metrics := resourceMetric.ScopeMetrics().AppendEmpty().Metrics()
+	// This generates 5 `Metric` objects each with Histogram datapoints of count 50 having the same set of 10 attrs.
+	genHistogramsPerMetricIn(metrics, "demo-histogram", 5, 10)
+
+	return request
 }
