@@ -4,6 +4,8 @@ import (
 	"fmt"
 	typesv2 "prometheusrwexporter-demo/types"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/prometheus/prompb"
@@ -16,24 +18,78 @@ func main() {
 	PrepareDummyExportRequest()
 }
 
-type V2WriteRequestBuilder struct {
-	resources pmetric.ResourceMetricsSlice
+type symbolsTable struct {
+	symbolRef map[string]uint32
 	symbols   []string
 }
 
-func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) V2WriteRequestBuilder {
-	resourceMetrics := exportReq.Metrics().ResourceMetrics()
-
-	return V2WriteRequestBuilder{
-		resources: resourceMetrics,
+func NewSymbolsTable() symbolsTable {
+	return symbolsTable{
+		symbolRef: map[string]uint32{"": 0},
+		symbols:   []string{""},
 	}
 }
 
+func (t *symbolsTable) Symbolize(str string) uint32 {
+	if ref, ok := t.symbolRef[str]; ok {
+		return ref
+	}
+	ref := uint32(len(t.symbols))
+	t.symbols = append(t.symbols, str)
+	t.symbolRef[str] = ref
+	return ref
+}
+
+type V2WriteRequestBuilder struct {
+	resources pmetric.ResourceMetricsSlice
+	symbols   symbolsTable
+	metricMap map[scopeID][]pmetric.MetricSlice
+}
+
+type scopeID string
+
+type resourceID int
+
+func (scopeID scopeID) getResourceId() resourceID {
+	// Split the string by "-scope-"
+	parts := strings.Split(string(scopeID), "-scope-")
+	// Convert the first part to an integer
+	num, _ := strconv.Atoi(parts[0])
+
+	return resourceID(num)
+}
+
+func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) (builder V2WriteRequestBuilder) {
+	resourceMetricsSlice := exportReq.Metrics().ResourceMetrics()
+	builder.resources = resourceMetricsSlice
+
+	for i := 0; i < resourceMetricsSlice.Len(); i++ {
+		resourceMetric := resourceMetricsSlice.At(i)
+
+		for j := 0; j < resourceMetricsSlice.At(i).ScopeMetrics().Len(); j++ {
+			scopeMetric := resourceMetric.ScopeMetrics().At(j)
+			scopeName := scopeMetric.Scope().Name()
+
+			// store each metric slice by scope
+			builder.addToMetricMap(i, scopeName, scopeMetric.Metrics())
+		}
+
+	}
+
+	builder.symbols = NewSymbolsTable()
+	return builder
+}
+
+// This could be de-duplicated.
+func (builder V2WriteRequestBuilder) addToMetricMap(resourcePosition int, scopeName string, metricSlice pmetric.MetricSlice) {
+	scopeMetricsName := fmt.Sprintf("%d-scope-%s", resourcePosition, scopeName)
+	builder.metricMap[scopeID(scopeMetricsName)] = append(builder.metricMap[scopeID(scopeMetricsName)], metricSlice)
+}
+
+// empty string is required as first element in symbols table
 // Seems like we might have to do this loop twice: 1. For creating the symbols table, 2. For converting Metrics to TS
+// neglecting scope attributes for now.
 func (builder V2WriteRequestBuilder) makeSymbols() {
-	// For this, you have to loop through each  metric of each Scope of each Resource: That means 1
-	// nested loop.
-	// This is ofcourse, too much complexity. What can we do?
 	resourceMetricsSlice := builder.resources
 	for i := 0; i < resourceMetricsSlice.Len(); i++ {
 
@@ -41,19 +97,56 @@ func (builder V2WriteRequestBuilder) makeSymbols() {
 			scopeMetricsSlice := resourceMetricsSlice.At(i).ScopeMetrics()
 
 			for k := 0; k < scopeMetricsSlice.At(j).Metrics().Len(); k++ {
-                scopeMetricsSlice.At(j).Metrics().At(k).Attributes()
-
-
+				metric := scopeMetricsSlice.At(j).Metrics().At(k)
+				switch metric.Type() {
+				case pmetric.MetricTypeExponentialHistogram:
+					dataPoints := metric.ExponentialHistogram().DataPoints()
+					builder.generateSymbolsFromLabels(getLabelsFromExpDataPoints(dataPoints))
+				}
 			}
 		}
 	}
 }
 
-func createRequest(symbols []string, timeSeries []typesv2.TimeSeries) typesv2.Request {
-	return typesv2.Request{
-		Symbols:    symbols,
-		Timeseries: timeSeries,
+func (builder V2WriteRequestBuilder) generateSymbolsFromLabels(labels []prompb.Label) (symbols []string) {
+	for _, label := range labels {
+		builder.symbols.Symbolize(label.Name)
+		builder.symbols.Symbolize(label.Value)
 	}
+
+	return symbols
+}
+
+func (builder V2WriteRequestBuilder) createV2WriteRequest() typesv2.Request {
+	var request typesv2.Request
+	resourceMetricsSlice := builder.resources
+	// Loop through each metric, generate the respective TS (1:1 relationship assumption)
+	// Lets get to work.
+	// If we store all these metrics to the builder, we won't need to loop through each time.
+	for i := 0; i < resourceMetricsSlice.Len(); i++ {
+
+		for j := 0; j < resourceMetricsSlice.At(i).ScopeMetrics().Len(); j++ {
+			scopeMetricsSlice := resourceMetricsSlice.At(i).ScopeMetrics()
+
+			for k := 0; k < scopeMetricsSlice.At(j).Metrics().Len(); k++ {
+				metric := scopeMetricsSlice.At(j).Metrics().At(k)
+				switch metric.Type() {
+				case pmetric.MetricTypeExponentialHistogram:
+
+				}
+			}
+		}
+	}
+
+	return request
+
+}
+
+func getLabelsFromExpDataPoints(dp pmetric.ExponentialHistogramDataPointSlice) (labels []prompb.Label) {
+	for i := 0; i < dp.Len(); i++ {
+		labels = append(labels, getLabelsFromAttrs(dp.At(i).Attributes())...)
+	}
+	return labels
 }
 
 // for simplicity, we will assume each histogram datapoint from a given metric is from the same ts
@@ -84,6 +177,7 @@ func exponentialToNativeHistogram(p pmetric.ExponentialHistogramDataPoint) types
 	}
 }
 
+// TODO: this needs to be updated
 // create a labelref table from the symbols and labelset and return it with the timeseries.
 func addLabelRefs(symbols []string, labelSet []prompb.Label, ts typesv2.TimeSeries) {
 	// ensure the symbols slice is sorted.
@@ -97,16 +191,6 @@ func addLabelRefs(symbols []string, labelSet []prompb.Label, ts typesv2.TimeSeri
 	}
 
 	ts.LabelsRefs = labelRefs
-}
-
-func generateSymbolsFromLabels(labels []prompb.Label) (symbols []string) {
-	for _, label := range labels {
-		symbols = append(symbols, label.Name, label.Value)
-	}
-
-	sort.Strings(symbols)
-
-	return symbols
 }
 
 func getLabelsFromAttrs(attributes pcommon.Map) []prompb.Label {
