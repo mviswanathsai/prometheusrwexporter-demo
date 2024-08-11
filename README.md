@@ -16,13 +16,14 @@ This project is a Proof of Concept (PoC) that showcases the process of building 
 
 ## Overview
 
-This project provides a simplified implementation to illustrate the steps required to transform OpenTelemetry metrics into Prometheus Remote Write v2 requests. It emphasizes the process of building label references (labelRefs) and assembling the v2 write request.
+This project provides a simplified implementation to illustrate the steps required to transform OpenTelemetry metrics into Prometheus Remote Write v2 requests. It emphasizes the process of building label references (labelRefs) and assembling the Prometheus remotewrite v2 write request.
 
 ## Key Concepts
 
 - **Symbol Reference Building**: The process of creating references to metric label value pairs (or, symbols), which are then used to minimize the size of Remote Write requests.
 - **V2 Write Request Creation**: Constructing a Prometheus Remote Write v2 request from an OTLP export request, showcasing the flow from OpenTelemetry data to Prometheus-compatible metrics.
 - **Proof of Concept**: This implementation is a PoC, intended to demonstrate the understanding of key processes rather than providing a production-ready solution.
+- **Encoding**: The specification is still marked experimental, and one of the ways we are still exploring is the use of other encoding libraries. To facilitate development in this direction, an encoder interface has been defined to decouple the builder and the encoder logic.
 
 ## Assumptions
 
@@ -30,6 +31,7 @@ This project provides a simplified implementation to illustrate the steps requir
 - **Label Consistency**: It is assumed that all data points for a given metric share the same set of labels, allowing the label reference to be generated from a single data point. i.e, 1 metric = 1 Timeseries.
 - **Resource Attributes**: It is assumed that the metrics generated from a given resource share the labels/attributes of the resource.
 - **Conversion Logic**: The conversion logic from otlp metrics to Prometheus metrics is quite complex. Since that is not the sole focus of this demo, the conversion logic has been replaced with a simpler (read, spoofed) logic.
+- **Encoding Implementation**: Snappy has been specified as the encoder to use in the Spec. Since the discussion about "which encoder to use" is still ongoing, I chose to demostrate the decoupling we might want from the "request builder" and the "encoder" by the defining an encoder interface. However, no logic has yet been implemented.
 
 ## Installation
 
@@ -105,13 +107,13 @@ func TestBuildLabelsFromLabelRef(t *testing.T) {
     nameRef := packSymbol(4, 0)
     valueRef := packSymbol(5, 4)
     labelRefs := []uint32{nameRef, valueRef}
-    
+
     labels := buildLabelsFromLabelRef(symbols, labelRefs)
-    
+
     expectedLabels := []prompb.Label{
         {Name: "name", Value: "viswa"},
     }
-    
+
     assert.Equal(t, expectedLabels, labels)
 }
 ```
