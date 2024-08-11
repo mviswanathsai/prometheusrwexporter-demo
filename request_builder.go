@@ -16,6 +16,7 @@ type V2WriteRequestBuilder struct {
 	scopeMetricSlices map[resourceID][]pmetric.Metric
 	request           typesv2.Request
 	tsSlice           []*ts
+	encoder           encoder
 }
 
 func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) (*V2WriteRequestBuilder, error) {
@@ -179,6 +180,13 @@ func (t *symbolsTable) Symbolize(str string) uint32 {
 	t.symbols = append(t.symbols, str)
 	t.symbolRef[str] = ref
 	return ref
+}
+
+// Since the discussion related to encoding is still ongoing, we would benefit from decoupling the
+// encoder logic from the request builder.
+type encoder interface {
+	Encode()
+	Decode()
 }
 
 type resourceID int
