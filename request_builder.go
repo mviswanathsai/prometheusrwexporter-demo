@@ -17,9 +17,11 @@ type V2WriteRequestBuilder struct {
 	request           typesv2.Request
 	tsSlice           []*ts
 	encoder           encoder
+	httpClient        httpClient
+	httpClientConfig  httpClientConfig
 }
 
-func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) (*V2WriteRequestBuilder, error) {
+func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest, httpClientConfig httpClientConfig) (*V2WriteRequestBuilder, error) {
 	scopeMetricSlices := make(map[resourceID][]pmetric.Metric)
 
 	resourceMetricsSlice := exportReq.Metrics().ResourceMetrics()
@@ -48,10 +50,11 @@ func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) (*V2WriteRequestBu
 		resources:         resourceMetricsSlice,
 		symbols:           NewSymbolsTable(),
 		request:           typesv2.Request{},
+		httpClientConfig:  httpClientConfig,
 	}, nil
 }
 
-func (builder *V2WriteRequestBuilder) CreateV2WriteRequest() {
+func (builder *V2WriteRequestBuilder) CreateRequest() {
 	var timeSeries []typesv2.TimeSeries
 	builder.makeTimeSeriesSlice()
 
@@ -116,6 +119,15 @@ func (builder *V2WriteRequestBuilder) symbolizeLabels(labels []prompb.Label) {
 		builder.symbols.Symbolize(label.Name)
 		builder.symbols.Symbolize(label.Value)
 	}
+}
+
+// Create a HTTP client with the HTTP Config
+func (builder *V2WriteRequestBuilder) createHTTPClient() {
+	builder.httpClient = "http-client"
+}
+
+// Send the request to a remote endpoint
+func (builder *V2WriteRequestBuilder) send() {
 }
 
 type ts struct {
@@ -192,6 +204,9 @@ type encoder interface {
 type resourceID int
 
 type stack []uint32
+
+type httpClient string
+type httpClientConfig string
 
 func newStack() stack {
 	return stack([]uint32{})
