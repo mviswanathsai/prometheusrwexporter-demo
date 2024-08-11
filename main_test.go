@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+
 func TestV2WriteRequestBuilder(t *testing.T) {
 	// Create a dummy export request
 	exportReq := PrepareDummyExportRequest()
@@ -18,8 +19,9 @@ func TestV2WriteRequestBuilder(t *testing.T) {
 	}
 
 	// Build the V2 remote write request
-	v2Request := builder.CreateV2WriteRequest()
+	builder.CreateV2WriteRequest()
 
+	v2Request := builder.request
 	// Verify the generated request
 	// Check that the number of TimeSeries is correct
 	expectedTimeSeriesCount := 5 // 1 resource, 1 scope, 5 metrics

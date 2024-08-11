@@ -50,7 +50,7 @@ func NewV2RequestBuilder(exportReq pmetricotlp.ExportRequest) (*V2WriteRequestBu
 	}, nil
 }
 
-func (builder *V2WriteRequestBuilder) CreateV2WriteRequest() typesv2.Request {
+func (builder *V2WriteRequestBuilder) CreateV2WriteRequest() {
 	var timeSeries []typesv2.TimeSeries
 	builder.makeTimeSeriesSlice()
 
@@ -71,7 +71,7 @@ func (builder *V2WriteRequestBuilder) CreateV2WriteRequest() typesv2.Request {
 		timeSeries = append(timeSeries, v2ts)
 	}
 
-	return typesv2.Request{
+	builder.request = typesv2.Request{
 		Symbols:    builder.symbols.symbols,
 		Timeseries: timeSeries,
 	}
